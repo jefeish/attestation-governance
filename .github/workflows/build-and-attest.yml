@@ -1,44 +1,90 @@
 name: Build and attest
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to build
+        required: true
+        default: main
+  workflow_run:
+    workflows:
+      - Mock SonarQube
+      - Mock CodeQL
+      - Mock Test
+    types: [completed]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  mock-sonarqube:
-    name: Mock SonarQube
+  check-gate:
+    name: Check all required workflows
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
     steps:
-      - name: Pretend to run SonarQube
-        run: echo "Mock SonarQube passed"
+      - name: Check the exact commit
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            target_sha="$WORKFLOW_SHA"
+          else
+            target_sha="$(gh api "repos/$REPOSITORY/commits/$REQUESTED_REF" --jq '.sha')"
+          fi
 
-  mock-codeql:
-    name: Mock CodeQL
-    runs-on: ubuntu-latest
-    steps:
-      - name: Pretend to run CodeQL
-        run: echo "Mock CodeQL passed"
+          echo "Checking workflows for commit $target_sha"
+          workflow_files=("mock-sonarqube.yml" "mock-codeql.yml" "mock-test.yml")
 
-  mock-test:
-    name: Mock test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Pretend to run tests
-        run: echo "Mock tests passed"
+          attempt=1
+          while [ "$attempt" -le 30 ]; do
+            all_done=true
+            for workflow_file in "${workflow_files[@]}"; do
+              result="$(gh run list \
+                --repo "$REPOSITORY" \
+                --workflow "$workflow_file" \
+                --commit "$target_sha" \
+                --limit 1 \
+                --json status,conclusion \
+                --jq 'if length == 0 then "missing" else .[0].status + ":" + (.[0].conclusion // "") end')"
+
+              echo "$workflow_file -> $result"
+              case "$result" in
+                completed:success) ;;
+                completed:*) echo "Required workflow failed: $workflow_file"; exit 1 ;;
+                *) all_done=false ;;
+              esac
+            done
+
+            if [ "$all_done" = true ]; then
+              echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            sleep 10
+            attempt=$((attempt + 1))
+          done
+
+          echo "Timed out waiting for all required workflows"
+          exit 1
 
   build:
     name: Build JAR
-    needs:
-      - mock-sonarqube
-      - mock-codeql
-      - mock-test
+    needs: check-gate
     runs-on: ubuntu-latest
     steps:
-      - name: Get the code
+      - name: Get the checked code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-gate.outputs.target_sha }}
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -65,14 +111,12 @@ jobs:
 
   attest:
     name: Attest checked JAR
-    if: github.event_name == 'push' && github.repository_visibility == 'public'
     needs:
-      - mock-sonarqube
-      - mock-codeql
-      - mock-test
+      - check-gate
       - build
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write
@@ -82,19 +126,19 @@ jobs:
         with:
           name: hello-world
           path: build
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
-      - name: Record the check results
+      - name: Record the successful checks
         run: |
           cat > build/check-results.json <<'EOF'
           {
             "repository": "${{ github.repository }}",
-            "commit": "${{ github.sha }}",
-            "workflow": "${{ github.workflow }}",
-            "run_id": "${{ github.run_id }}",
+            "commit": "${{ needs.check-gate.outputs.target_sha }}",
             "checks": {
-              "mock-sonarqube": "${{ needs.mock-sonarqube.result }}",
-              "mock-codeql": "${{ needs.mock-codeql.result }}",
-              "mock-test": "${{ needs.mock-test.result }}"
+              "mock-sonarqube": "success",
+              "mock-codeql": "success",
+              "mock-test": "success"
             }
           }
           EOF
