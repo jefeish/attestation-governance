@@ -1,0 +1,284 @@
+name: Reference build and attestation archive
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    uses: ./.github/workflows/mock-codeql.yml
+    with:
+      source-repository: ${{ github.repository }}
+      source-sha: ${{ github.sha }}
+
+  sonarqube:
+    uses: ./.github/workflows/mock-sonarqube.yml
+    with:
+      source-repository: ${{ github.repository }}
+      source-sha: ${{ github.sha }}
+
+  dependency-review:
+    uses: ./.github/workflows/mock-dependency-review.yml
+    with:
+      source-repository: ${{ github.repository }}
+      source-sha: ${{ github.sha }}
+
+  tests:
+    uses: ./.github/workflows/mock-tests.yml
+    with:
+      source-repository: ${{ github.repository }}
+      source-sha: ${{ github.sha }}
+
+  build:
+    needs:
+      - codeql
+      - sonarqube
+      - dependency-review
+      - tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact-name: ${{ steps.package.outputs.artifact-name }}
+      artifact-file: ${{ steps.package.outputs.artifact-file }}
+      artifact-digest: ${{ steps.package.outputs.artifact-digest }}
+      source-sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Confirm every gate passed
+        env:
+          CODEQL: ${{ needs.codeql.outputs.result }}
+          SONARQUBE: ${{ needs.sonarqube.outputs.result }}
+          DEPENDENCY_REVIEW: ${{ needs.dependency-review.outputs.result }}
+          TESTS: ${{ needs.tests.outputs.result }}
+        run: |
+          set -euo pipefail
+          for result in "$CODEQL" "$SONARQUBE" "$DEPENDENCY_REVIEW" "$TESTS"; do
+            [[ "$result" == "pass" ]] || {
+              echo "A required mock check did not pass"
+              exit 1
+            }
+          done
+
+      - name: Resolve source commit
+        id: source
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: printf 'sha=%s\n' "${SOURCE_SHA,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out approved source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          persist-credentials: false
+
+      - name: Build Java application
+        run: mvn --batch-mode --no-transfer-progress clean package
+
+      - name: Stage release artifact
+        id: package
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          artifact_name="hello-attestations-$SOURCE_SHA"
+          artifact_file="$artifact_name.jar"
+          mkdir -p dist
+          cp target/hello-attestations-1.0.0.jar "dist/$artifact_file"
+          digest="$(sha256sum "dist/$artifact_file" | awk '{print $1}')"
+          {
+            printf 'artifact-name=%s\n' "$artifact_name"
+            printf 'artifact-file=%s\n' "$artifact_file"
+            printf 'artifact-digest=sha256:%s\n' "$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload build output for this workflow run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.package.outputs.artifact-name }}
+          path: dist/${{ steps.package.outputs.artifact-file }}
+          if-no-files-found: error
+          compression-level: 0
+
+  publish-record:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs:
+      - codeql
+      - sonarqube
+      - dependency-review
+      - tests
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download built artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: dist
+
+      - name: Verify artifact digest
+        env:
+          ARTIFACT_FILE: ${{ needs.build.outputs.artifact-file }}
+          EXPECTED_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          actual="sha256:$(sha256sum "dist/$ARTIFACT_FILE" | awk '{print $1}')"
+          [[ "$actual" == "$EXPECTED_DIGEST" ]] || {
+            echo "Downloaded artifact digest changed"
+            exit 1
+          }
+
+      - name: Create evidence and predicates
+        env:
+          CODEQL_EVIDENCE: ${{ needs.codeql.outputs.evidence }}
+          SONARQUBE_EVIDENCE: ${{ needs.sonarqube.outputs.evidence }}
+          DEPENDENCY_EVIDENCE: ${{ needs.dependency-review.outputs.evidence }}
+          TEST_EVIDENCE: ${{ needs.tests.outputs.evidence }}
+          ARTIFACT_FILE: ${{ needs.build.outputs.artifact-file }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p records
+          jq -nS \
+            --argjson codeql "$CODEQL_EVIDENCE" \
+            --argjson sonarqube "$SONARQUBE_EVIDENCE" \
+            --argjson dependency "$DEPENDENCY_EVIDENCE" \
+            --argjson tests "$TEST_EVIDENCE" \
+            '{
+              schemaVersion: "1.0.0",
+              checks: [$codeql, $sonarqube, $dependency, $tests]
+            }' > records/check-evidence.json
+
+          for control in codeql sonarqube dependency-review tests; do
+            jq -e \
+              --arg control "$control" \
+              --arg digest "$ARTIFACT_DIGEST" \
+              --arg repository "${SOURCE_REPOSITORY,,}" \
+              --arg commit "${SOURCE_SHA,,}" '
+                .checks[] |
+                select(.control == $control) |
+                select(.result == "pass") |
+                select(.sourceRepository == $repository) |
+                select(.commitSha == $commit) |
+                {
+                  schemaVersion: "1.0.0",
+                  control: .control,
+                  result: .result,
+                  artifactDigest: $digest,
+                  sourceRepository: .sourceRepository,
+                  commitSha: .commitSha,
+                  evidence: .
+                }
+              ' records/check-evidence.json > "records/$control-predicate.json"
+          done
+
+          jq -nS \
+            --arg artifactName "$ARTIFACT_FILE" \
+            --arg artifactDigest "$ARTIFACT_DIGEST" \
+            --arg sourceRepository "${SOURCE_REPOSITORY,,}" \
+            --arg commitSha "${SOURCE_SHA,,}" \
+            --arg runUrl "$SERVER_URL/$SOURCE_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT" \
+            '{
+              schemaVersion: "1.0.0",
+              artifactName: $artifactName,
+              artifactDigest: $artifactDigest,
+              sourceRepository: $sourceRepository,
+              commitSha: $commitSha,
+              workflowRun: $runUrl,
+              controls: ["codeql", "sonarqube", "dependency-review", "tests"]
+            }' > records/record-manifest.json
+
+      - name: Attest build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: dist/${{ needs.build.outputs.artifact-file }}
+
+      - name: Attest mock CodeQL result
+        id: attest-codeql
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ needs.build.outputs.artifact-file }}
+          predicate-type: https://github.com/jefeish/attestation-governance/predicates/mock-check/v1
+          predicate-path: records/codeql-predicate.json
+
+      - name: Attest mock SonarQube result
+        id: attest-sonarqube
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ needs.build.outputs.artifact-file }}
+          predicate-type: https://github.com/jefeish/attestation-governance/predicates/mock-check/v1
+          predicate-path: records/sonarqube-predicate.json
+
+      - name: Attest mock dependency-review result
+        id: attest-dependency
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ needs.build.outputs.artifact-file }}
+          predicate-type: https://github.com/jefeish/attestation-governance/predicates/mock-check/v1
+          predicate-path: records/dependency-review-predicate.json
+
+      - name: Attest test result
+        id: attest-tests
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ needs.build.outputs.artifact-file }}
+          predicate-type: https://github.com/jefeish/attestation-governance/predicates/mock-check/v1
+          predicate-path: records/tests-predicate.json
+
+      - name: Assemble durable record
+        env:
+          ARTIFACT_FILE: ${{ needs.build.outputs.artifact-file }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          CODEQL_BUNDLE: ${{ steps.attest-codeql.outputs.bundle-path }}
+          SONARQUBE_BUNDLE: ${{ steps.attest-sonarqube.outputs.bundle-path }}
+          DEPENDENCY_BUNDLE: ${{ steps.attest-dependency.outputs.bundle-path }}
+          TEST_BUNDLE: ${{ steps.attest-tests.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "dist/$ARTIFACT_FILE" records/
+          cp "$PROVENANCE_BUNDLE" records/build-provenance.sigstore.json
+          cp "$CODEQL_BUNDLE" records/codeql.sigstore.json
+          cp "$SONARQUBE_BUNDLE" records/sonarqube.sigstore.json
+          cp "$DEPENDENCY_BUNDLE" records/dependency-review.sigstore.json
+          cp "$TEST_BUNDLE" records/tests.sigstore.json
+          checksum_file=$(mktemp)
+          (
+            cd records
+            find . -maxdepth 1 -type f -print0 |
+              sort -z |
+              xargs -0 sha256sum
+          ) > "$checksum_file"
+          mv "$checksum_file" records/SHA256SUMS
+
+      - name: Publish durable GitHub Release record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          ARTIFACT_FILE: ${{ needs.build.outputs.artifact-file }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          tag="attestation-record-$SOURCE_SHA-$RUN_ID-$RUN_ATTEMPT"
+          gh release create "$tag" records/* \
+            --target "$SOURCE_SHA" \
+            --title "Attestation record for ${SOURCE_SHA:0:12}" \
+            --notes "Artifact: $ARTIFACT_FILE
+          Digest: $ARTIFACT_DIGEST
+          This release preserves the mock-check evidence and Sigstore bundles."
