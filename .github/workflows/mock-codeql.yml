@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   mock-codeql:
@@ -14,3 +16,24 @@ jobs:
     steps:
       - name: Pretend to run CodeQL
         run: echo "Mock CodeQL passed"
+
+      - name: Save durable check evidence
+        if: github.event_name == 'push' && github.repository_visibility == 'public'
+        run: |
+          mkdir -p build/check-evidence
+          cat > build/check-evidence/mock-codeql.json <<'EOF'
+          {
+            "repository": "${{ github.repository }}",
+            "commit": "${{ github.sha }}",
+            "check": "mock-codeql",
+            "result": "success"
+          }
+          EOF
+
+      - name: Attest the check evidence
+        if: github.event_name == 'push' && github.repository_visibility == 'public'
+        uses: actions/attest@v4
+        with:
+          subject-path: build/check-evidence/mock-codeql.json
+          predicate-type: https://example.com/attestation/check-results/v1
+          predicate: '{"check":"mock-codeql","result":"success"}'

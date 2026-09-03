@@ -15,7 +15,6 @@ on:
     types: [completed]
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
@@ -26,7 +25,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
     steps:
-      - name: Check the exact commit
+      - name: Verify durable check attestations
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -41,27 +40,34 @@ jobs:
             target_sha="$(gh api "repos/$REPOSITORY/commits/$REQUESTED_REF" --jq '.sha')"
           fi
 
-          echo "Checking workflows for commit $target_sha"
-          workflow_files=("mock-sonarqube.yml" "mock-codeql.yml" "mock-test.yml")
+          echo "Checking attestations for commit $target_sha"
+          check_names=("mock-sonarqube" "mock-codeql" "mock-test")
 
           attempt=1
           while [ "$attempt" -le 30 ]; do
             all_done=true
-            for workflow_file in "${workflow_files[@]}"; do
-              result="$(gh run list \
-                --repo "$REPOSITORY" \
-                --workflow "$workflow_file" \
-                --commit "$target_sha" \
-                --limit 1 \
-                --json status,conclusion \
-                --jq 'if length == 0 then "missing" else .[0].status + ":" + (.[0].conclusion // "") end')"
+            for check_name in "${check_names[@]}"; do
+              evidence_file="check-evidence/$check_name.json"
+              mkdir -p check-evidence
+              cat > "$evidence_file" <<EOF
+          {
+            "repository": "$REPOSITORY",
+            "commit": "$target_sha",
+            "check": "$check_name",
+            "result": "success"
+          }
+          EOF
 
-              echo "$workflow_file -> $result"
-              case "$result" in
-                completed:success) ;;
-                completed:*) echo "Required workflow failed: $workflow_file"; exit 1 ;;
-                *) all_done=false ;;
-              esac
+              if gh attestation verify "$evidence_file" \
+                --repo "$REPOSITORY" \
+                --predicate-type https://example.com/attestation/check-results/v1 \
+                --signer-workflow "$REPOSITORY/.github/workflows/$check_name.yml" \
+                --source-digest "$target_sha" >/dev/null 2>&1; then
+                echo "$check_name -> verified"
+              else
+                echo "$check_name -> missing or invalid"
+                all_done=false
+              fi
             done
 
             if [ "$all_done" = true ]; then
@@ -116,7 +122,6 @@ jobs:
       - build
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
       id-token: write
       attestations: write
@@ -129,16 +134,16 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
-      - name: Record the successful checks
+      - name: Record the verified checks
         run: |
           cat > build/check-results.json <<'EOF'
           {
             "repository": "${{ github.repository }}",
             "commit": "${{ needs.check-gate.outputs.target_sha }}",
             "checks": {
-              "mock-sonarqube": "success",
-              "mock-codeql": "success",
-              "mock-test": "success"
+              "mock-sonarqube": "verified",
+              "mock-codeql": "verified",
+              "mock-test": "verified"
             }
           }
           EOF

@@ -47,8 +47,8 @@ java -jar build/hello-world.jar
 ## What the workflows do
 
 The three mock check workflows run when a PR is opened or updated. They also
-run on `main`, so there is a check result for the exact commit that was
-actually merged.
+run on `main`. When they pass on `main`, each one creates a signed, durable
+check-evidence attestation for the exact commit.
 
 The build-and-attest workflow runs in either of two ways:
 
@@ -58,13 +58,15 @@ The build-and-attest workflow runs in either of two ways:
 The build-and-attest workflow then:
 
 1. Finds the exact commit to build.
-2. Waits until all three separate check workflows finish for that commit.
-3. Stops if any check is missing or failed.
-4. Builds the JAR from that exact commit.
-5. Makes build provenance and check-results attestations.
+2. Recreates the small evidence files for that commit.
+3. Verifies the signed evidence attestations for all three checks.
+4. Stops if any evidence is missing or invalid.
+5. Builds the JAR from that exact commit.
+6. Makes build provenance and check-results attestations.
 
 This means a bypass user can merge code with failed PR checks, but that exact
-merged commit cannot receive an attested JAR.
+merged commit cannot receive an attested JAR. The later build does not depend
+on GitHub's short-lived check-run history.
 
 ```mermaid
 flowchart TD
@@ -77,11 +79,12 @@ flowchart TD
     E -->|Yes| F[Normal merge]
     E -->|No| G[Normal merge is blocked]
     F --> H[Checks run again on exact main commit]
-    H --> I[build-and-attest.yml]
-    I --> J{All exact-commit checks pass?}
-    J -->|No| K[No attested artifact]
-    J -->|Yes| L[Build JAR]
-    L --> M[Create attestations]
+    H --> I[Each check signs durable evidence]
+    I --> J[build-and-attest.yml]
+    J --> K{All evidence attestations verify?}
+    K -->|No| L[No attested artifact]
+    K -->|Yes| M[Build JAR]
+    M --> N[Create attestations]
 ```
 
 The build and attestation are two **jobs in one workflow**, not two workflows.
@@ -100,8 +103,8 @@ sequenceDiagram
     Checks-->>PR: Pass or fail
     PR->>Main: Merge (normal or bypass)
     Main->>Checks: Run checks for exact merge SHA
-    Checks->>Release: Workflow completed
-    Release->>Release: Verify all three checks for SHA
+    Checks->>Release: Sign durable evidence for SHA
+    Release->>Release: Verify all three evidence attestations
     Release->>Release: Build only when all pass
     Release->>Release: Attest the JAR
 ```
@@ -111,10 +114,14 @@ The workflow needs special permission to create the attestation:
 - `attestations: write` lets it write the attestation.
 - `id-token: write` lets GitHub sign the attestation.
 
-The workflow uses the `actions/attest@v4` action. With no extra predicate
-settings, the first use makes a build provenance attestation. The second use
-makes a small custom attestation containing the repository, commit, and mock
-check results. Both attestations refer to the same JAR SHA.
+The check workflows use `actions/attest@v4` to sign small evidence files. The
+build workflow verifies those files later, even after GitHub removes old
+workflow check records. It then makes a build provenance attestation and a
+custom check-results attestation for the JAR.
+
+The evidence files are deterministic: they contain only the repository, commit,
+check name, and `success`. The later workflow can recreate the exact bytes and
+verify their SHA and signed attestation.
 
 ## Check the attestation
 
