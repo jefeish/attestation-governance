@@ -135,3 +135,5 @@ gh attestation verify hello-world.jar -R OWNER/REPOSITORY
 Replace `OWNER/REPOSITORY` with the real repository name.
 
 If the command says the attestation is valid, the JAR has a trusted build story.
+
+---
