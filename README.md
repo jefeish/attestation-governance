@@ -47,8 +47,10 @@ java -jar build/hello-world.jar
 3. It compiles `HelloWorld.java`.
 4. It puts the app into `hello-world.jar`.
 5. It saves the JAR as a workflow artifact.
-6. On a push, it creates a build attestation for the JAR. Pull requests still
-   build and test the app, but do not publish an attestation.
+6. On a push to a public repository, it creates a build attestation for the JAR.
+   Pull requests still build and test the app, but do not publish an attestation.
+   GitHub does not support persisting attestations for user-owned private
+   repositories, so this demo skips that step there.
 
 The workflow needs special permission to create the attestation:
 
