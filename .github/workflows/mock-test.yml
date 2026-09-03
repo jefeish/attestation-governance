@@ -1,0 +1,16 @@
+name: Mock Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mock-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pretend to run tests
+        run: echo "Mock tests passed"
