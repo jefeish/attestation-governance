@@ -8,14 +8,34 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  mock-sonarqube:
+    name: Mock SonarQube
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-      artifact-metadata: write
+    steps:
+      - name: Pretend to run SonarQube
+        run: echo "Mock SonarQube passed"
 
+  mock-codeql:
+    name: Mock CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pretend to run CodeQL
+        run: echo "Mock CodeQL passed"
+
+  mock-test:
+    name: Mock test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pretend to run tests
+        run: echo "Mock tests passed"
+
+  build:
+    name: Build JAR
+    needs:
+      - mock-sonarqube
+      - mock-codeql
+      - mock-test
+    runs-on: ubuntu-latest
     steps:
       - name: Get the code
         uses: actions/checkout@v4
@@ -37,14 +57,56 @@ jobs:
       - name: Test the JAR
         run: java -jar build/hello-world.jar
 
-      - name: Save the JAR
+      - name: Save the JAR for attestation
         uses: actions/upload-artifact@v4
         with:
           name: hello-world
           path: build/hello-world.jar
 
-      - name: Make an attestation
-        if: github.event_name == 'push' && github.repository_visibility == 'public'
+  attest:
+    name: Attest checked JAR
+    if: github.event_name == 'push' && github.repository_visibility == 'public'
+    needs:
+      - mock-sonarqube
+      - mock-codeql
+      - mock-test
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Get the JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: hello-world
+          path: build
+
+      - name: Record the check results
+        run: |
+          cat > build/check-results.json <<'EOF'
+          {
+            "repository": "${{ github.repository }}",
+            "commit": "${{ github.sha }}",
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}",
+            "checks": {
+              "mock-sonarqube": "${{ needs.mock-sonarqube.result }}",
+              "mock-codeql": "${{ needs.mock-codeql.result }}",
+              "mock-test": "${{ needs.mock-test.result }}"
+            }
+          }
+          EOF
+
+      - name: Make build provenance attestation
         uses: actions/attest@v4
         with:
           subject-path: build/hello-world.jar
+
+      - name: Make checks attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: build/hello-world.jar
+          predicate-type: https://example.com/attestation/check-results/v1
+          predicate-path: build/check-results.json
