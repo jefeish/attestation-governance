@@ -1,0 +1,50 @@
+name: Build and attest
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build the JAR
+        run: |
+          mkdir -p build/classes
+          javac -d build/classes src/main/java/HelloWorld.java
+          jar --create --file build/hello-world.jar \
+            --main-class HelloWorld \
+            -C build/classes .
+
+      - name: Test the JAR
+        run: java -jar build/hello-world.jar
+
+      - name: Save the JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-world
+          path: build/hello-world.jar
+
+      - name: Make an attestation
+        if: github.event_name == 'push' && github.repository_visibility == 'public'
+        uses: actions/attest@v4
+        with:
+          subject-path: build/hello-world.jar
