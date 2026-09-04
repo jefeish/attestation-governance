@@ -62,7 +62,8 @@ The build-and-attest workflow then:
 3. Verifies the signed evidence attestations for all three checks.
 4. Stops if any evidence is missing or invalid.
 5. Builds the JAR from that exact commit.
-6. Makes one build provenance attestation for the JAR.
+6. Makes a build provenance attestation for the JAR.
+7. Attaches a compliance attestation to the same JAR that lists the checks.
 
 This means a bypass user can merge code with failed PR checks, but that exact
 merged commit cannot receive an attested JAR. The later build does not depend
@@ -164,8 +165,32 @@ The workflow needs special permission to create the attestation:
 
 The check workflows use `actions/attest@v4` to sign small evidence files. The
 build workflow verifies those files later, even after GitHub removes old
-workflow check records. It then makes one build provenance attestation for the
+workflow check records. It then makes a build provenance attestation for the
 JAR.
+
+## Two attestations on the JAR
+
+The finished JAR carries two signed notes:
+
+- **Build provenance**: where the JAR came from (repository, workflow, commit).
+- **Compliance record**: which checks passed, using the predicate type
+  `https://example.com/attestation/compliance/v1`.
+
+The gate before the build stops bad code from ever becoming a JAR. The
+compliance record does something different: it travels with the JAR. Someone
+who only has the JAR file, and no access to our workflow logs, can still ask
+GitHub which checks passed for it.
+
+Check it like this:
+
+```bash
+gh attestation verify hello-world.jar \
+  -R OWNER/REPOSITORY \
+  --predicate-type https://example.com/attestation/compliance/v1
+```
+
+Both notes are bound to the same thing: the SHA-256 digest of the JAR. That is
+why more notes can be added later by other workflows without rebuilding.
 
 The evidence files are deterministic: they contain only the repository, commit,
 check name, and `success`. The later workflow can recreate the exact bytes and
