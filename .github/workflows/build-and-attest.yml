@@ -118,7 +118,7 @@ jobs:
       - build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
       attestations: write
     steps:
@@ -131,6 +131,7 @@ jobs:
           run-id: ${{ github.run_id }}
 
       - name: Make build provenance attestation
+        id: provenance
         uses: actions/attest@v4
         with:
           subject-path: build/hello-world.jar
@@ -154,8 +155,64 @@ jobs:
           cat compliance.json
 
       - name: Attach the compliance record to the JAR
+        id: compliance
         uses: actions/attest@v4
         with:
           subject-path: build/hello-world.jar
           predicate-type: https://example.com/attestation/compliance/v1
           predicate-path: compliance.json
+
+      - name: Collect the release files
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          COMPLIANCE_BUNDLE: ${{ steps.compliance.outputs.bundle-path }}
+        run: |
+          mkdir -p release
+          cp build/hello-world.jar release/
+          cp "$PROVENANCE_BUNDLE" release/hello-world.jar.provenance.sigstore.json
+          cp "$COMPLIANCE_BUNDLE" release/hello-world.jar.compliance.sigstore.json
+          ( cd release && sha256sum hello-world.jar > hello-world.jar.sha256 )
+          ls -l release
+
+      - name: Write the release notes
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ needs.check-gate.outputs.target_sha }}
+          PROVENANCE_URL: ${{ steps.provenance.outputs.attestation-url }}
+          COMPLIANCE_URL: ${{ steps.compliance.outputs.attestation-url }}
+        run: |
+          digest="$(cut -d' ' -f1 release/hello-world.jar.sha256)"
+          {
+            echo "Built from commit \`$TARGET_SHA\` after every required check passed."
+            echo
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| JAR SHA-256 | \`$digest\` |"
+            echo "| Build provenance | $PROVENANCE_URL |"
+            echo "| Compliance record | $COMPLIANCE_URL |"
+            echo
+            echo "Verify online:"
+            echo
+            echo '```bash'
+            echo "gh attestation verify hello-world.jar -R $REPOSITORY"
+            echo '```'
+            echo
+            echo "Verify offline with the attached bundle:"
+            echo
+            echo '```bash'
+            echo "gh attestation verify hello-world.jar -R $REPOSITORY \\"
+            echo "  --bundle hello-world.jar.provenance.sigstore.json"
+            echo '```'
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.check-gate.outputs.target_sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          gh release create "build-$RUN_NUMBER" release/* \
+            --target "$TARGET_SHA" \
+            --title "Attested build $RUN_NUMBER" \
+            --notes-file release-notes.md
