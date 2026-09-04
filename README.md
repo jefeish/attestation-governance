@@ -125,6 +125,21 @@ that is a repository policy choice. This reference workflow does not assume
 either policy. It always requires check evidence for the exact commit it will
 build.
 
+## Protect the protection
+
+The check workflows and the build gate are part of the security boundary.
+Protect them like production code:
+
+- Require review for changes under `.github/workflows/`.
+- Do not let normal developers bypass those reviews.
+- Prefer a trusted reusable workflow stored in a separate protected repository.
+- Keep the required check names and signer workflow identities under administrator
+  control.
+
+If a bypass user can change both a check workflow and the build gate, they could
+remove the evidence requirement. The attestation proves what the trusted
+workflow did, so the workflow itself must be trusted.
+
 ```mermaid
 sequenceDiagram
     participant PR as Pull request
