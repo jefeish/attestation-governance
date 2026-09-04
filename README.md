@@ -68,25 +68,6 @@ This means a bypass user can merge code with failed PR checks, but that exact
 merged commit cannot receive an attested JAR. The later build does not depend
 on GitHub's short-lived check-run history.
 
-```mermaid
-flowchart TD
-    A[Open or update PR] --> B[mock-sonarqube.yml]
-    A --> C[mock-codeql.yml]
-    A --> D[mock-test.yml]
-    B --> E{Ruleset checks pass?}
-    C --> E
-    D --> E
-    E -->|Yes| F[Normal merge]
-    E -->|No| G[Normal merge is blocked]
-    F --> H[Checks run again on exact main commit]
-    H --> I[Each check signs durable evidence]
-    I --> J[PR close starts build-and-attest.yml]
-    J --> K{All evidence attestations verify?}
-    K -->|No| L[No attested artifact]
-    K -->|Yes| M[Build JAR]
-    M --> N[Create provenance attestation]
-```
-
 The build and attestation are two **jobs in one workflow**, not two workflows.
 They are separate because attestation must happen only after the JAR exists.
 The three checks are separate workflows because that matches the normal PR
@@ -204,3 +185,4 @@ Replace `OWNER/REPOSITORY` with the real repository name.
 If the command says the attestation is valid, the JAR has a trusted build story.
 In this reference design, that provenance attestation is only created after the
 build workflow verifies all required check evidence.
+
