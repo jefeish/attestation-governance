@@ -130,28 +130,7 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
-      - name: Record the verified checks
-        run: |
-          cat > build/check-results.json <<'EOF'
-          {
-            "repository": "${{ github.repository }}",
-            "commit": "${{ needs.check-gate.outputs.target_sha }}",
-            "checks": {
-              "mock-sonarqube": "verified",
-              "mock-codeql": "verified",
-              "mock-test": "verified"
-            }
-          }
-          EOF
-
       - name: Make build provenance attestation
         uses: actions/attest@v4
         with:
           subject-path: build/hello-world.jar
-
-      - name: Make checks attestation
-        uses: actions/attest@v4
-        with:
-          subject-path: build/hello-world.jar
-          predicate-type: https://example.com/attestation/check-results/v1
-          predicate-path: build/check-results.json
