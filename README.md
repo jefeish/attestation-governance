@@ -73,6 +73,58 @@ They are separate because attestation must happen only after the JAR exists.
 The three checks are separate workflows because that matches the normal PR
 model and lets each check appear as its own required status check.
 
+## Why checks run twice
+
+Seeing the three checks run twice is expected.
+
+The first run checks the PR. The second run checks the exact commit that landed
+on the target branch. These commits are not always the same:
+
+```text
+PR head or test-merge SHA  !=  final target-branch SHA
+```
+
+The build must use the second SHA. Otherwise, it could build one commit while
+showing check evidence from a different commit.
+
+```mermaid
+flowchart LR
+    A[PR check SHA] --> B[Review and ruleset]
+    B --> C[Merge, normal or bypass]
+    C --> D[Final target-branch SHA]
+    D --> E[Checks run again]
+    E --> F[Durable check evidence]
+    F --> G[Build and attest]
+```
+
+The second run also handles bypasses:
+
+- If a bypassed merge passes all checks on the final commit, it can receive an
+  attested build.
+- If a bypassed merge fails any check, it creates no valid evidence and gets no
+  attested build.
+
+This is a commit identity problem, not a timing problem. Even if all PR checks
+finished before the merge, their result may describe the PR SHA rather than the
+final target-branch SHA.
+
+## How merge models change this
+
+The second run is the safest default for normal GitHub merge behavior.
+
+| Merge model | Can the first checks prove the final build? | What it means |
+| --- | --- | --- |
+| Merge commit | No | The merge creates a new commit. Run checks again. |
+| Squash merge | No | Git creates a new squashed commit. Run checks again. |
+| Rebase merge | Usually no | The commits can receive new SHAs. Run checks again. |
+| Fast-forward only | Sometimes | The PR head SHA can remain unchanged. |
+| Merge queue | Sometimes | Checks can run on the exact merge candidate if the queue preserves it. |
+
+The design can be changed to use a merge queue or fast-forward-only policy, but
+that is a repository policy choice. This reference workflow does not assume
+either policy. It always requires check evidence for the exact commit it will
+build.
+
 ```mermaid
 sequenceDiagram
     participant PR as Pull request
