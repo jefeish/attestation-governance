@@ -229,6 +229,38 @@ There are three places to look, in order of how easy they are:
 Both notes are bound to the same thing: the SHA-256 digest of the JAR. That is
 why more notes can be added later by other workflows without rebuilding.
 
+## The release
+
+Every successful attested build publishes a GitHub Release tagged
+`build-<run number>`, pointed at the exact commit that was built.
+
+Four files are attached:
+
+| File | What it is |
+| --- | --- |
+| `hello-world.jar` | The build output |
+| `hello-world.jar.sha256` | The digest, so you can check the file did not change |
+| `hello-world.jar.provenance.sigstore.json` | The signed build provenance bundle |
+| `hello-world.jar.compliance.sigstore.json` | The signed compliance bundle |
+
+The two `.sigstore.json` files are copies of the signed notes. They let someone
+verify the JAR **offline**, with no call to GitHub:
+
+```bash
+gh attestation verify hello-world.jar \
+  -R OWNER/REPOSITORY \
+  --bundle hello-world.jar.provenance.sigstore.json
+```
+
+This matters if the JAR is later copied somewhere else, such as Artifactory or
+an air-gapped network. The bundle travels with the file.
+
+The release notes also print the JAR digest and direct links to both
+attestations on GitHub.
+
+A release only happens after the gate passes. There is no way to publish a
+release for code that skipped a check.
+
 The evidence files are deterministic: they contain only the repository, commit,
 check name, and `success`. The later workflow can recreate the exact bytes and
 verify their SHA and signed attestation.
