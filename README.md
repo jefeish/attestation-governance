@@ -189,6 +189,43 @@ gh attestation verify hello-world.jar \
   --predicate-type https://example.com/attestation/compliance/v1
 ```
 
+That command only answers "is this signed note real?". It prints a pass or a
+fail. It does **not** show the check names.
+
+### Where the check names are actually visible
+
+To read the list of checks, add `--format json` and pull out the predicate:
+
+```bash
+gh attestation verify hello-world.jar \
+  -R OWNER/REPOSITORY \
+  --predicate-type https://example.com/attestation/compliance/v1 \
+  --format json \
+  --jq '.[].verificationResult.statement.predicate'
+```
+
+Example output:
+
+```json
+{
+  "repository": "OWNER/REPOSITORY",
+  "commit": "abc123...",
+  "checks": [
+    { "name": "mock-sonarqube", "result": "success" },
+    { "name": "mock-codeql", "result": "success" },
+    { "name": "mock-test", "result": "success" }
+  ]
+}
+```
+
+There are three places to look, in order of how easy they are:
+
+| Where | What you see |
+| --- | --- |
+| Repository **Attestations** tab | Both notes listed for the JAR, with their predicate types |
+| `gh attestation verify --format json` | The full check list, as shown above |
+| `gh attestation download` | The raw signed bundle, for offline or archive use |
+
 Both notes are bound to the same thing: the SHA-256 digest of the JAR. That is
 why more notes can be added later by other workflows without rebuilding.
 
