@@ -134,3 +134,28 @@ jobs:
         uses: actions/attest@v4
         with:
           subject-path: build/hello-world.jar
+
+      - name: Write the compliance record
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ needs.check-gate.outputs.target_sha }}
+        run: |
+          cat > compliance.json <<EOF
+          {
+            "repository": "$REPOSITORY",
+            "commit": "$TARGET_SHA",
+            "checks": [
+              { "name": "mock-sonarqube", "result": "success" },
+              { "name": "mock-codeql", "result": "success" },
+              { "name": "mock-test", "result": "success" }
+            ]
+          }
+          EOF
+          cat compliance.json
+
+      - name: Attach the compliance record to the JAR
+        uses: actions/attest@v4
+        with:
+          subject-path: build/hello-world.jar
+          predicate-type: https://example.com/attestation/compliance/v1
+          predicate-path: compliance.json
