@@ -52,7 +52,7 @@ check-evidence attestation for the exact commit.
 
 The build-and-attest workflow runs in either of two ways:
 
-- GitHub starts it when one of the three check workflows finishes on `main`.
+- GitHub starts it when a PR closes after being merged.
 - A person starts it with **Run workflow** and chooses a branch, tag, or commit.
 
 The build-and-attest workflow then:
@@ -80,7 +80,7 @@ flowchart TD
     E -->|No| G[Normal merge is blocked]
     F --> H[Checks run again on exact main commit]
     H --> I[Each check signs durable evidence]
-    I --> J[build-and-attest.yml]
+    I --> J[PR close starts build-and-attest.yml]
     J --> K{All evidence attestations verify?}
     K -->|No| L[No attested artifact]
     K -->|Yes| M[Build JAR]

@@ -1,18 +1,14 @@
 name: Build and attest
 
 on:
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       ref:
         description: Branch, tag, or commit to build
         required: true
         default: main
-  workflow_run:
-    workflows:
-      - Mock SonarQube
-      - Mock CodeQL
-      - Mock Test
-    types: [completed]
 
 permissions:
   contents: read
@@ -20,7 +16,7 @@ permissions:
 jobs:
   check-gate:
     name: Check all required workflows
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     outputs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
@@ -31,11 +27,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
-          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           REQUESTED_REF: ${{ inputs.ref }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_run" ]; then
-            target_sha="$WORKFLOW_SHA"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            target_sha="$MERGE_SHA"
           else
             target_sha="$(gh api "repos/$REPOSITORY/commits/$REQUESTED_REF" --jq '.sha')"
           fi
