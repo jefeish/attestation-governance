@@ -265,6 +265,32 @@ The evidence files are deterministic: they contain only the repository, commit,
 check name, and `success`. The later workflow can recreate the exact bytes and
 verify their SHA and signed attestation.
 
+## How this compares to GitHub's own guidance
+
+GitHub Support gave general recommendations for using artifact attestations as
+a compliance gate. Here is how this reference design measures up against
+that guidance, so you can see what is solid and what is still open.
+
+| Support recommendation | This repo | Verdict |
+| --- | --- | --- |
+| Attestation anchors on artifact digest | SLSA provenance on `hello-world.jar` | ✅ |
+| Multiple attestations across async stages | Provenance + compliance attestation, both on the JAR digest | ✅ |
+| Compliance results re-recorded **against the artifact digest** after build | `compliance.json` (the check list) is attested to the JAR digest in the `attest` job | ✅ |
+| Pre-build checks enforced at merge via rulesets | A branch ruleset on `main` requires `Mock CodeQL`, `Mock SonarQube`, and `Mock test` | ✅ |
+| Deploy job runs `gh attestation verify` per predicate, fails closed | Verification happens **before the build**, in `check-gate`; there is no separate deploy job | ⚠️ partial |
+| Environments + custom deployment protection rules | Not present in this reference design | ❌ open |
+| Pin with `--signer-workflow` | Yes, used in `check-gate` | ✅ |
+| Trusted **reusable** builder workflow (SLSA Build Level 3) | The three checks are separate local workflow files, not a shared reusable workflow | ❌ open |
+| Retention / audit via CLI, API, org artifacts page | Works as-is, plus the GitHub Release keeps a durable copy of the JAR and both signed bundles | ✅ |
+
+Two gaps remain open on purpose, to keep this reference simple:
+
+- There is no deploy job, so there is nothing yet demonstrating a
+  fail-closed check right before a real deployment.
+- The mock checks are not a shared reusable workflow, so `--signer-workflow`
+  currently pins a check name rather than a certified trusted builder. That
+  is the step needed to move from SLSA Build Level 2 to Build Level 3.
+
 ## Check the attestation
 
 After the workflow finishes, download `hello-world.jar` from the workflow run.
