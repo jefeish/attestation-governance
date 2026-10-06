@@ -1,6 +1,6 @@
 # Attestation Governance Demo
 
-This is a very small Java example.
+This small Java demo shows how GitHub Actions workflows use `attestations` to verify an artifact’s **provenance** and **compliance**.
 
 The app says:
 
